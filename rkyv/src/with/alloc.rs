@@ -18,6 +18,7 @@ use alloc::{
     borrow::Cow,
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
+    sync::Arc,
     vec::Vec,
 };
 #[cfg(feature = "std")]
@@ -25,6 +26,7 @@ use std::{
     borrow::Cow,
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
+    sync::Arc,
 };
 
 // Map for Vecs
@@ -597,6 +599,61 @@ where
         unsafe {
             copy_nonoverlapping(field.as_ptr().cast(), result.as_mut_ptr(), field.len());
             result.set_len(field.len());
+        }
+
+        Ok(result)
+    }
+}
+
+impl<T: Archive> ArchiveWith<Arc<Vec<T>>> for Raw {
+    type Archived = RawArchivedVec<T::Archived>;
+    type Resolver = VecResolver;
+
+    unsafe fn resolve_with(
+        field: &Arc<Vec<T>>,
+        pos: usize,
+        resolver: Self::Resolver,
+        out: *mut Self::Archived,
+    ) {
+        RawArchivedVec::resolve_from_slice(field.as_slice(), pos, resolver, out);
+    }
+}
+
+impl<T, S> SerializeWith<Arc<Vec<T>>, S> for Raw
+where
+    T: Serialize<S>,
+    S: Serializer,
+{
+    fn serialize_with(field: &Arc<Vec<T>>, serializer: &mut S) -> Result<Self::Resolver, S::Error> {
+        use ::core::mem::size_of;
+
+        // Basic debug assert that T and T::Archived are at least the same size
+        debug_assert_eq!(size_of::<T>(), size_of::<T::Archived>());
+
+        unsafe { ArchivedVec::serialize_copy_from_slice(field.as_slice(), serializer) }
+    }
+}
+
+impl<T, D> DeserializeWith<RawArchivedVec<T::Archived>, Arc<Vec<T>>, D> for Raw
+where
+    T: Archive,
+    T::Archived: Deserialize<T, D>,
+    D: Fallible + ?Sized,
+{
+    fn deserialize_with(
+        field: &RawArchivedVec<T::Archived>,
+        _: &mut D,
+    ) -> Result<Arc<Vec<T>>, D::Error> {
+        use ::core::{mem::size_of, ptr::copy_nonoverlapping};
+
+        // Basic debug assert that T and T::Archived are at least the same size
+        debug_assert_eq!(size_of::<T>(), size_of::<T::Archived>());
+
+        let mut result = Arc::new(Vec::with_capacity(field.len()));
+        let borrowed = Arc::get_mut(&mut result).unwrap();
+        unsafe {
+            copy_nonoverlapping(field.as_ptr().cast(), borrowed.as_mut_ptr(), field.len());
+            borrowed.set_len(field.len());
         }
 
         Ok(result)
